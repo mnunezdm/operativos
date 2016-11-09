@@ -9,6 +9,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <ctype.h>
 #include "filtrar.h"
 #include <errno.h>
 
@@ -21,7 +22,7 @@ extern void filtrar_con_filtro(char* nombre_filtro);
 
 /* Esta funcion lanza todos los procesos necesarios para ejecutar los filtros.
    Dichos procesos tendran que tener redirigida su entrada y su salida. */
-void preparar_filtros(int nfiltros, char* filtros[]);
+void preparar_filtros(void);
 
 /* Esta funcion recorrera el directorio pasado como argumento y por cada entrada
    que no sea un directorio o cuyo nombre comience por un punto '.' la lee y 
@@ -37,6 +38,8 @@ void esperar_terminacion(void);
    de los filtros. */
 extern void preparar_alarma(void);
 
+void manejar_alarma(void);
+
 
 /* ---------------- IMPLEMENTACIONES ----------------- */
 char** filtros;   /* Lista de nombres de los filtros a aplicar */
@@ -46,8 +49,7 @@ pid_t* pids;      /* Lista de los PIDs de los procesos que ejecutan los filtros 
 
 
 /* Funcion principal */
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     /* Chequeo de argumentos */
     if (argc < 2){
         /* Invocacion sin argumentos  o con un numero de argumentos insuficiente */
@@ -59,19 +61,51 @@ int main(int argc, char* argv[])
     n_filtros = argc-2;                               /* Numero de filtros a usar */
     pids = (pid_t*)malloc(sizeof(pid_t)*n_filtros);   /* Lista de pids */
 
-    //	preparar_alarma();
+    preparar_alarma();
 
     if (n_filtros > 0) {
-        preparar_filtros(n_filtros, filtros);
+        preparar_filtros();
     }
 
     recorrer_directorio(argv[1]);
-
-    //esperar_terminacion();
+		
+//    esperar_terminacion();
 
     return 0;
 }
 
+extern void preparar_alarma(void){
+	char* entorno;
+	int valor;
+	struct sigaction act;
+	if ((entorno = getenv("FILTRAR_TIMEOUT")) != NULL){
+		if(!isdigit(entorno[0])){
+			fprintf(stderr,"Error FILTRAR_TIMEOUT no es entero positivo: '%s'\n", entorno);
+			return;
+		}
+		valor = strtol(entorno, NULL, 10);
+		sigemptyset(&act.sa_mask);
+		act.sa_handler=manejar_alarma;
+		act.sa_flags = SA_RESTART;
+		sigaction(SIGALRM,&act,NULL); 
+		alarm(valor);
+		fprintf(stderr, "AVISO: La alarma vencera tras %d segundos!\n", valor);
+	}	
+}
+
+void manejar_alarma(void) {
+	int i;
+	fprintf(stderr,"AVISO: La alarma ha saltado!\n");
+	if (n_filtros > 0) {
+		for (i = 0; i < n_filtros; i++) {
+			if (kill(pids[i], 0)) {
+				kill(pids[i],SIGKILL);
+			}
+		}
+	}
+	esperar_terminacion();	
+	exit(1);
+}
 
 void recorrer_directorio(char* nombre_dir) {
     DIR* dir = NULL;
@@ -132,25 +166,30 @@ void recorrer_directorio(char* nombre_dir) {
         close(fd);
     }
     /* Cerrar. */
-    closedir(dir);
+		closedir(dir);
     /* IMPORTANTE:
      * Para que los lectores del pipe puedan terminar
      * no deben quedar escritores al otro extremo. */
     // IMPORTANTE
 }
 
-void preparar_filtros(int nfiltros, char* filtros[]) {
+void preparar_filtros(void) {
     int i;
-    int fd[2];
+    int fd[n_filtros][2];
     char* ext;
-    for (i = nfiltros-1; i >= 0; i--) {
+		for (i = 0; i < n_filtros; i++) {
+			if (pipe(fd[i])){
+    		fprintf(stderr,"Error al crear el pipe\n");
+      	exit(1);
+			}
+    }
+    for (i = n_filtros-1; i >= 0; i--) {
         /* Tuberia hacia el hijo (que es el proceso que filtra). */
-        if (pipe(fd) < 0) {
-            fprintf(stderr,"Error al crear el pipe\n");
-            exit(1);
-        }
+				//fprintf(stderr, "generando hijo %d, filtro %s\n", i, filtros[i]);
         /* Lanzar nuevo proceso */
-        switch(pids[i]=fork()){
+				////////////////////////////////////////
+				// ESTO NO FUNCIONA!!!!!!!!!!!!!!!!!!       
+				switch(pids[i]=fork()){
             case -1:
                 /* Error. Mostrar y terminar. */
                 fprintf(stderr,"Error al crear proceso %d\n",pids[0]);
@@ -158,10 +197,14 @@ void preparar_filtros(int nfiltros, char* filtros[]) {
                 break;
             case  0:
                 /* Hijo: Redireccion y Ejecuta el filtro. */
-                close(0);
-                dup(fd[0]);
-                close(fd[0]);
-                close(fd[1]);
+                if (i != (n_filtros-1)) {
+									close(1);
+									dup(fd[i+1][1]);
+									//close(fd[i+1][i];
+								}
+								close(0);
+                dup(fd[i][0]);
+                //close(fd[i][0]);
                 ext=strrchr(filtros[i],'.');
                 /* El nombre termina en .so
                  montamos la libreria estandar */
@@ -174,12 +217,18 @@ void preparar_filtros(int nfiltros, char* filtros[]) {
                 }
                 break;
             default:
-                /* Padre: Redireccion */
-                close(1);
-                dup(fd[1]);
-                close(fd[0]);
-                close(fd[1]);
-                break;
+              /* Padre: Redireccion */
+							//if (i != (n_filtros-1)){
+							//	close(fd[i+1][1];
+							//}
+							//else
+							if (i == 0){
+								close(1);
+								dup(fd[i][1]);
+							}
+              //close(fd[i][0]);
+              //close(fd[i][1]);
+							break;
         }
     }
 }
@@ -200,11 +249,11 @@ void imprimir_estado(char* filtro, int status) {
 
 
 void esperar_terminacion(void){
-    int p;
+    int p, status;
     for(p=0;p<n_filtros;p++) {
-        /* Espera al proceso pids[p] */
-
-        /* Muestra su estado. */
-
+			/* Espera al proceso pids[p] */
+			waitpid(pids[p], &status, 0);
+			/* Muestra su estado. */
+			imprimir_estado(filtros[p], status);
     }
 }
