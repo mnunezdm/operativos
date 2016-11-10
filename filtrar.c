@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include "filtrar.h"
 #include <errno.h>
+#include <dlfcn.h>
 
 /* ---------------- PROTOTIPOS ----------------- */
 /* Esta funcion monta el filtro indicado y busca el simbolo "tratar"
@@ -69,7 +70,7 @@ int main(int argc, char* argv[]) {
 
     recorrer_directorio(argv[1]);
 		
-//    esperar_terminacion();
+    esperar_terminacion();
 
     return 0;
 }
@@ -167,6 +168,7 @@ void recorrer_directorio(char* nombre_dir) {
     }
     /* Cerrar. */
 		closedir(dir);
+		close(1);
     /* IMPORTANTE:
      * Para que los lectores del pipe puedan terminar
      * no deben quedar escritores al otro extremo. */
@@ -177,71 +179,70 @@ void preparar_filtros(void) {
     int i;
     int fd[n_filtros][2];
     char* ext;
-		for (i = 0; i < n_filtros; i++) {
+		for (i = n_filtros-1; i >= 0; i--) {
+      /* Tuberia hacia el hijo (que es el proceso que filtra). */
+			//fprintf(stderr, "generando hijo %d, filtro %s\n", i, filtros[i]);
 			if (pipe(fd[i])){
     		fprintf(stderr,"Error al crear el pipe\n");
       	exit(1);
 			}
-    }
-    for (i = n_filtros-1; i >= 0; i--) {
-        /* Tuberia hacia el hijo (que es el proceso que filtra). */
-				//fprintf(stderr, "generando hijo %d, filtro %s\n", i, filtros[i]);
-        /* Lanzar nuevo proceso */
-				////////////////////////////////////////
-				// ESTO NO FUNCIONA!!!!!!!!!!!!!!!!!!       
-				switch(pids[i]=fork()){
-            case -1:
-                /* Error. Mostrar y terminar. */
-                fprintf(stderr,"Error al crear proceso %d\n",pids[0]);
-                exit(1);
-                break;
-            case  0:
-                /* Hijo: Redireccion y Ejecuta el filtro. */
-                if (i != (n_filtros-1)) {
-									close(1);
-									dup(fd[i+1][1]);
-									//close(fd[i+1][i];
-								}
-								close(0);
-                dup(fd[i][0]);
-                //close(fd[i][0]);
-                ext=strrchr(filtros[i],'.');
-                /* El nombre termina en .so
-                 montamos la libreria estandar */
-                if (ext && !strcmp(ext,".so")){
-                    fprintf(stderr,"Error al ejecutar el filtro '%s'\n", filtros[i]);
-                }
-                    /* Mandato estandar */
-                else {
-                    filtrar_con_filtro(filtros[i]);
-                }
-                break;
-            default:
-              /* Padre: Redireccion */
-							//if (i != (n_filtros-1)){
-							//	close(fd[i+1][1];
-							//}
-							//else
-							if (i == 0){
-								close(1);
-								dup(fd[i][1]);
-							}
-              //close(fd[i][0]);
-              //close(fd[i][1]);
-							break;
+			/* Lanzar nuevo proceso */  
+			switch(pids[i]=fork()){
+      	case -1:
+        	/* Error. Mostrar y terminar. */
+          fprintf(stderr,"Error al crear proceso %d\n",pids[0]);
+          exit(1);
+          break;
+        case  0:
+          /* Hijo: Redireccion y Ejecuta el filtro. */
+          close(0);
+          dup(fd[i][0]);
+					close(fd[i][0]);
+					close(fd[i][1]);
+          ext=strrchr(filtros[i],'.');
+          /* El nombre termina en .so
+          montamos la libreria estandar */
+          if (ext && !strcmp(ext,".so")){
+          	fprintf(stderr,"Error al ejecutar el filtro '%s'\n", filtros[i]);
+          }
+          /* Mandato estandar */
+          else {
+          	execlp(filtros[i],filtros[i], NULL);
+    				fprintf(stderr, "Error al ejecutar el mandato '%s'\n", filtros[i]);
+    				exit(1);
+          }
+          break;
+				default:
+          /* Padre: Redireccion */
+					close(1);
+					dup(fd[i][1]);
+          close(fd[i][0]);
+          close(fd[i][1]);
+					break;
         }
     }
 }
 
 void filtrar_con_filtro(char* nombre_filtro) {
-    execlp(nombre_filtro, nombre_filtro, NULL);
-    fprintf(stderr, "Error al ejecutar el mandato '%s'\n", nombre_filtro);
-    exit(1);
+	void * handler;
+	handler = dlopen(nombre_filtro,RTLD_LAZY);
+	if (dlerror() != NULL){
+		fprintf(stderr,"Error al abrir la biblioteca '%s'\n",nombre_filtro);
+		exit(1);
+	}
+	handler = dlsym(handler, "tratar");
+	if (dlerror() != NULL){
+		fprintf(stderr,"Error al buscar el simbolo '%s' en '%s'\n","tratar",nombre_filtro);
+		exit(1);
+	}
+	if (dlclose < 0) {
+		exit(1);
+	}
 }
 
 void imprimir_estado(char* filtro, int status) {
     /* Imprimimos el nombre del filtro y su estado de terminacion */
-    if(WIFEXITED(status))
+  	if(WIFEXITED(status))
         printf(stderr, "%s: %d\n", filtro, WEXITSTATUS(status));
     else
         printf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
@@ -252,7 +253,10 @@ void esperar_terminacion(void){
     int p, status;
     for(p=0;p<n_filtros;p++) {
 			/* Espera al proceso pids[p] */
-			waitpid(pids[p], &status, 0);
+			if (waitpid(-1, &status, 0)<0) {
+				fprintf(stderr,"Error al esperar proceso %d\n", pids[p]);
+				exit(1);
+			}
 			/* Muestra su estado. */
 			imprimir_estado(filtros[p], status);
     }
