@@ -5,15 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
-#include <time.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <ctype.h>
-#include "filtrar.h"
-#include <errno.h>
 #include <dlfcn.h>
-
+#include <errno.h>
 /* ---------------- PROTOTIPOS ----------------- */
 /* Esta funcion monta el filtro indicado y busca el simbolo "tratar"
    que debe contener, y aplica dicha funcion "tratar()" para filtrar
@@ -77,14 +73,14 @@ int main(int argc, char* argv[]) {
 
 extern void preparar_alarma(void){
 	char* entorno;
-	int valor;
+	unsigned int valor;
 	struct sigaction act;
 	if ((entorno = getenv("FILTRAR_TIMEOUT")) != NULL){
 		if(!isdigit(entorno[0])){
 			fprintf(stderr,"Error FILTRAR_TIMEOUT no es entero positivo: '%s'\n", entorno);
 			return;
 		}
-		valor = strtol(entorno, NULL, 10);
+		valor = (unsigned int) strtol(entorno, NULL, 10);
 		sigemptyset(&act.sa_mask);
 		act.sa_handler=(void*)manejar_alarma;
 		act.sa_flags = SA_RESTART;
@@ -102,10 +98,14 @@ void manejar_alarma(void) {
 			if (!kill(pids[i], 0)) {
 				kill(pids[i],SIGKILL);
 			}
+			else if (errno != ESRCH) {
+				fprintf(stderr, "Error al intentar matar proceso%d\n", pids[i]);
+				exit(1);
+			}
 		}
 	}
 	esperar_terminacion();	
-	exit(1);
+	exit(0);
 }
 
 void recorrer_directorio(char* nombre_dir) {
@@ -123,7 +123,7 @@ void recorrer_directorio(char* nombre_dir) {
         fprintf(stderr, "Error al abrir el directorio '%s'\n",nombre_dir);
         exit(1);
     }
-    if ((ent=readdir(dir)) == NULL) {
+    if ((readdir(dir)) == NULL) {
         fprintf(stderr, "Error al leer el directorio '%s'\n",nombre_dir);
         exit(1);
     }
@@ -161,7 +161,7 @@ void recorrer_directorio(char* nombre_dir) {
             break;
         }
         /* Emitimos el contenido del archivo por la salida estandar. */
-        while (write(1,buff,read(fd,buff,4096)) > 0)
+        while (write(1, buff, (size_t) read(fd, buff, 4096)) > 0)
             continue;
         /* Cerrar. */
         close(fd);
@@ -192,7 +192,6 @@ void preparar_filtros(void) {
         	/* Error. Mostrar y terminar. */
           fprintf(stderr,"Error al crear proceso %d\n",pids[0]);
           exit(1);
-          break;
         case  0:
           /* Hijo: Redireccion y Ejecuta el filtro. */
           close(0);
@@ -227,13 +226,10 @@ void filtrar_con_filtro(char* nombre_filtro) {
 	void * handler;
 	int (*tratar)(char*, char*, int);
 	int tratados, leidos=0;
-	char buff_in[1024], buff_out[1024], libreria[128];
-	getcwd(libreria, sizeof(buff_in));
-	strcat(libreria, "/");
-	strcat(libreria, nombre_filtro);
-	handler = dlopen(libreria,RTLD_LAZY);
+	char buff_in[1024], buff_out[1024];
+	handler = dlopen(nombre_filtro,RTLD_LAZY);
 	if (!handler){
-		fprintf(stderr,"Error al abrir la biblioteca '%s'\n",libreria);
+		fprintf(stderr,"Error al abrir la biblioteca '%s'\n",nombre_filtro);
 		exit(1);
 	}
 	tratar = dlsym(handler, "tratar");
@@ -241,9 +237,9 @@ void filtrar_con_filtro(char* nombre_filtro) {
 		fprintf(stderr,"Error al buscar el simbolo '%s' en '%s'\n","tratar",nombre_filtro);
 		exit(1);
 	}
-	while ((leidos = read(0, buff_in, 1024)) > 0) {
+	while ((leidos = (int) read(0, buff_in, 1024)) > 0) {
 		tratados = tratar(buff_in, buff_out, leidos);
-		write(1, buff_out, tratados);
+		write(1, buff_out, sizeof(char)*tratados);
 	}
 	if (dlclose(handler) < 0) {
 		exit(1);
@@ -255,7 +251,7 @@ void imprimir_estado(char* filtro, int status) {
  	if(WIFEXITED(status)){
 		fprintf(stderr, "%s: %d\n", filtro, WEXITSTATUS(status));
   } else {
-  	fprintf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
+  	fprintf(stderr,"%s: senyal %d\n",filtro,WTERMSIG(status));
 	}
 }
 
