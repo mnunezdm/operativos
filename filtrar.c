@@ -86,7 +86,7 @@ extern void preparar_alarma(void){
 		}
 		valor = strtol(entorno, NULL, 10);
 		sigemptyset(&act.sa_mask);
-		act.sa_handler=manejar_alarma;
+		act.sa_handler=(void*)manejar_alarma;
 		act.sa_flags = SA_RESTART;
 		sigaction(SIGALRM,&act,NULL); 
 		alarm(valor);
@@ -99,7 +99,7 @@ void manejar_alarma(void) {
 	fprintf(stderr,"AVISO: La alarma ha saltado!\n");
 	if (n_filtros > 0) {
 		for (i = 0; i < n_filtros; i++) {
-			if (kill(pids[i], 0)) {
+			if (!kill(pids[i], 0)) {
 				kill(pids[i],SIGKILL);
 			}
 		}
@@ -203,11 +203,11 @@ void preparar_filtros(void) {
           /* El nombre termina en .so
           montamos la libreria estandar */
           if (ext && !strcmp(ext,".so")){
-          	fprintf(stderr,"Error al ejecutar el filtro '%s'\n", filtros[i]);
+          	filtrar_con_filtro(filtros[i]);
           }
           /* Mandato estandar */
           else {
-          	execlp(filtros[i],filtros[i], NULL);
+						execlp(filtros[i],filtros[i], NULL);
     				fprintf(stderr, "Error al ejecutar el mandato '%s'\n", filtros[i]);
     				exit(1);
           }
@@ -225,39 +225,49 @@ void preparar_filtros(void) {
 
 void filtrar_con_filtro(char* nombre_filtro) {
 	void * handler;
-	handler = dlopen(nombre_filtro,RTLD_LAZY);
-	if (dlerror() != NULL){
-		fprintf(stderr,"Error al abrir la biblioteca '%s'\n",nombre_filtro);
+	int (*tratar)(char*, char*, int);
+	int tratados, leidos=0;
+	char buff_in[1024], buff_out[1024], libreria[128];
+	getcwd(libreria, sizeof(buff_in));
+	strcat(libreria, "/");
+	strcat(libreria, nombre_filtro);
+	handler = dlopen(libreria,RTLD_LAZY);
+	if (!handler){
+		fprintf(stderr,"Error al abrir la biblioteca '%s'\n",libreria);
 		exit(1);
 	}
-	handler = dlsym(handler, "tratar");
+	tratar = dlsym(handler, "tratar");
 	if (dlerror() != NULL){
 		fprintf(stderr,"Error al buscar el simbolo '%s' en '%s'\n","tratar",nombre_filtro);
 		exit(1);
 	}
-	if (dlclose < 0) {
+	while ((leidos = read(0, buff_in, 1024)) > 0) {
+		tratados = tratar(buff_in, buff_out, leidos);
+		write(1, buff_out, tratados);
+	}
+	if (dlclose(handler) < 0) {
 		exit(1);
 	}
 }
 
 void imprimir_estado(char* filtro, int status) {
-    /* Imprimimos el nombre del filtro y su estado de terminacion */
-  	if(WIFEXITED(status))
-        printf(stderr, "%s: %d\n", filtro, WEXITSTATUS(status));
-    else
-        printf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
+  /* Imprimimos el nombre del filtro y su estado de terminacion */
+ 	if(WIFEXITED(status)){
+		fprintf(stderr, "%s: %d\n", filtro, WEXITSTATUS(status));
+  } else {
+  	fprintf(stderr,"%s: senal %d\n",filtro,WTERMSIG(status));
+	}
 }
 
-
 void esperar_terminacion(void){
-    int p, status;
-    for(p=0;p<n_filtros;p++) {
-			/* Espera al proceso pids[p] */
-			if (waitpid(-1, &status, 0)<0) {
-				fprintf(stderr,"Error al esperar proceso %d\n", pids[p]);
-				exit(1);
-			}
-			/* Muestra su estado. */
-			imprimir_estado(filtros[p], status);
-    }
+	int p, status;
+  for(p=0;p<n_filtros;p++) {
+		/* Espera al proceso pids[p] */
+		if (waitpid(-1, &status, 0)<0) {
+			fprintf(stderr,"Error al esperar proceso %d\n", pids[p]);
+			exit(1);
+		}
+		/* Muestra su estado. */
+		imprimir_estado(filtros[p], status);
+	}
 }
