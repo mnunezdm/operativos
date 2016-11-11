@@ -9,7 +9,6 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <dlfcn.h>
-#include <errno.h>
 /* ---------------- PROTOTIPOS ----------------- */
 /* Esta funcion monta el filtro indicado y busca el simbolo "tratar"
    que debe contener, y aplica dicha funcion "tratar()" para filtrar
@@ -35,15 +34,14 @@ void esperar_terminacion(void);
    de los filtros. */
 extern void preparar_alarma(void);
 
-void manejar_alarma(void);
+void imprimir_estado(char *filtro, int status);
 
+void manejar_alarma(void);
 
 /* ---------------- IMPLEMENTACIONES ----------------- */
 char **filtros;   /* Lista de nombres de los filtros a aplicar */
 int n_filtros; /* Tama~no de dicha lista */
 pid_t *pids;      /* Lista de los PIDs de los procesos que ejecutan los filtros */
-
-
 
 /* Funcion principal */
 int main(int argc, char *argv[]) {
@@ -93,16 +91,14 @@ extern void preparar_alarma(void) {
 void manejar_alarma(void) {
     int i;
     fprintf(stderr, "AVISO: La alarma ha saltado!\n");
-    if (n_filtros > 0) {
-        for (i = 0; i < n_filtros; i++) {
-            if (!kill(pids[i], 0)) {
-                kill(pids[i], SIGKILL);
-            } else if (errno != ESRCH) {
-                fprintf(stderr, "Error al intentar matar proceso%d\n", pids[i]);
-                exit(1);
-            }
-        }
+    if ((kill(getpid(), 0))==- 1 ) {
+        fprintf(stderr,"Error al intentar matar proceso %d\n", pids[0]);
+        exit(1);
     }
+    if (n_filtros > 0)
+        for (i = 0; i < n_filtros; i++)
+            if (!kill(pids[i], 0))
+                kill(pids[i], SIGKILL);
     esperar_terminacion();
     exit(0);
 }
@@ -202,8 +198,7 @@ void preparar_filtros(void) {
                 montamos la libreria estandar */
                 if (ext && !strcmp(ext, ".so")) {
                     filtrar_con_filtro(filtros[i]);
-                }
-                    /* Mandato estandar */
+                }/* Mandato estandar */
                 else {
                     execlp(filtros[i], filtros[i], NULL);
                     fprintf(stderr, "Error al ejecutar el mandato '%s'\n", filtros[i]);
@@ -243,6 +238,7 @@ void filtrar_con_filtro(char *nombre_filtro) {
     if (dlclose(handler) < 0) {
         exit(1);
     }
+    exit(0);
 }
 
 void imprimir_estado(char *filtro, int status) {
