@@ -76,7 +76,7 @@ extern void preparar_alarma(void) {
     if ((entorno = getenv("FILTRAR_TIMEOUT")) != NULL) {
         if (!isdigit(entorno[0])) {
             fprintf(stderr, "Error FILTRAR_TIMEOUT no es entero positivo: '%s'\n", entorno);
-            return;
+            exit(1);
         }
         valor = (unsigned int) strtol(entorno, NULL, 10);
         sigemptyset(&act.sa_mask);
@@ -89,15 +89,16 @@ extern void preparar_alarma(void) {
 }
 
 void manejar_alarma(void) {
-    int i;
+    int i = 0, senyal = 0;
     fprintf(stderr, "AVISO: La alarma ha saltado!\n");
-    if ((kill(getpid(), 0))==- 1 ) {
-        fprintf(stderr,"Error al intentar matar proceso %d\n", pids[0]);
-        exit(1);
-    }
     if (n_filtros > 0)
         for (i = 0; i < n_filtros; i++)
-            if (!kill(pids[i], 0))
+            senyal = kill(pids[i], 0);
+            if (senyal < 0) {
+                fprintf(stderr,"Error al intentar matar proceso %d\n", pids[0]);
+                exit(1);
+            }
+            if (senyal)
                 kill(pids[i], SIGKILL);
     esperar_terminacion();
     exit(0);
@@ -251,19 +252,14 @@ void imprimir_estado(char *filtro, int status) {
 }
 
 void esperar_terminacion(void) {
-    int p, status, i;
-    pid_t pid;
+    int p, status;
     for (p = 0; p < n_filtros; p++) {
         /* Espera al proceso pids[p] */
-        if ((pid = waitpid(0, &status, 0)) < 0) {
+        if (waitpid(0, &status, 0) < 0) {
             fprintf(stderr, "Error al esperar proceso %d\n", pids[p]);
             exit(1);
         }
-        for (i = 0; i < n_filtros; i++) {
-            if (pids[i] == pid)
-                break;
-        }
         /* Muestra su estado. */
-        imprimir_estado(filtros[i], status);
+        imprimir_estado(filtros[p], status);
     }
 }
