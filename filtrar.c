@@ -89,17 +89,18 @@ extern void preparar_alarma(void) {
 }
 
 void manejar_alarma(void) {
-    int i = 0, senyal = 0;
+    int i = 0;
     fprintf(stderr, "AVISO: La alarma ha saltado!\n");
-    if (n_filtros > 0)
-        for (i = 0; i < n_filtros; i++)
-            senyal = kill(pids[i], 0);
-            if (senyal < 0) {
-                fprintf(stderr,"Error al intentar matar proceso %d\n", pids[0]);
-                exit(1);
+    if (n_filtros > 0) {
+        for (i = 0; i < n_filtros; i++) {
+            if (kill(pids[i], 0) == 0) {
+                if ((kill(pids[i], SIGKILL)) < 0 ) {
+                    fprintf(stderr, "Error al intentar matar proceso %d\n", pids[0]);
+                    exit(1);
+                }
             }
-            if (senyal)
-                kill(pids[i], SIGKILL);
+        }
+    }
     esperar_terminacion();
     exit(0);
 }
@@ -116,7 +117,7 @@ void recorrer_directorio(char *nombre_dir) {
     dir = opendir(nombre_dir);
     /* Tratamiento del error. */
     if (dir == NULL) {
-        fprintf(stderr, "Error al abrir el directorio '%s'\n", relativo);
+        fprintf(stderr, "Error al abrir el directorio '%s'\n", nombre_dir);
         exit(1);
     }
     if ((readdir(dir)) == NULL) {
@@ -233,7 +234,8 @@ void filtrar_con_filtro(char *nombre_filtro) {
         exit(1);
     }
     while ((leidos = (int) read(0, buff_in, 1024)) > 0) {
-        tratados = tratar(buff_in, buff_out, leidos);
+        if ((tratados = tratar(buff_in, buff_out, leidos)) == 0 )
+             break;
         write(1, buff_out, sizeof(char) * tratados);
     }
     if (dlclose(handler) < 0) {
